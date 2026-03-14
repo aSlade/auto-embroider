@@ -1,0 +1,10 @@
+Timestamp: 2026-03-14_20-40-15
+Source: cat_realistic.png
+Width: 150mm
+Colors: 10
+Fill spacing: 0.6mm
+Fill angle: 45deg
+Outputs:
+  cat_realistic_filled.dst (85.9 KB)
+  cat_realistic_filled.pes (172.8 KB)
+  cat_realistic_outline.dst (7.5 KB)
