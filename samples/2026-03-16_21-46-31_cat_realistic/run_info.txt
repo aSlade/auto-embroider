@@ -1,0 +1,10 @@
+Timestamp: 2026-03-16_21-46-31
+Source: cat_realistic.png
+Width: 50.8mm
+Colors: 8
+Fill spacing: 0.5mm
+Fill angle: 45deg
+Outputs:
+  cat_realistic_filled.dst (15.3 KB)
+  cat_realistic_filled.pes (31.7 KB)
+  cat_realistic_outline.dst (5.0 KB)
