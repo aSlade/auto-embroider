@@ -201,6 +201,69 @@ class Canvas:
 
     # ── Fill algorithms ────────────────────────────────────────
 
+    @staticmethod
+    def _inset_polygon(points, inset):
+        """Shrink a polygon inward by *inset* mm (simple edge-offset).
+
+        Each edge is shifted inward along its normal.  Adjacent shifted
+        edges are intersected to find the new vertex.  This is a basic
+        approach that works well for convex and mildly concave shapes at
+        small inset values (like half a thread width).
+        """
+        n = len(points)
+        if n < 3 or inset <= 0:
+            return list(points)
+
+        # Compute inward-shifted edges as (point, direction) pairs
+        edges = []
+        for i in range(n):
+            x0, y0 = points[i]
+            x1, y1 = points[(i + 1) % n]
+            dx, dy = x1 - x0, y1 - y0
+            length = math.hypot(dx, dy)
+            if length == 0:
+                edges.append(((x0, y0), (1, 0)))
+                continue
+            # Inward normal (assumes CCW winding; works for CW too — the
+            # sign is corrected below by checking area).
+            nx, ny = -dy / length, dx / length
+            edges.append(((x0 + nx * inset, y0 + ny * inset), (dx, dy)))
+
+        # Detect winding — if polygon area is CW, flip normals
+        area = 0
+        for i in range(n):
+            x0, y0 = points[i]
+            x1, y1 = points[(i + 1) % n]
+            area += (x1 - x0) * (y1 + y0)
+        if area > 0:  # CW winding, flip
+            edges = []
+            for i in range(n):
+                x0, y0 = points[i]
+                x1, y1 = points[(i + 1) % n]
+                dx, dy = x1 - x0, y1 - y0
+                length = math.hypot(dx, dy)
+                if length == 0:
+                    edges.append(((x0, y0), (1, 0)))
+                    continue
+                nx, ny = dy / length, -dx / length
+                edges.append(((x0 + nx * inset, y0 + ny * inset), (dx, dy)))
+
+        # Intersect consecutive shifted edges to find new vertices
+        result = []
+        for i in range(n):
+            p1, d1 = edges[i]
+            p2, d2 = edges[(i + 1) % n]
+            cross = d1[0] * d2[1] - d1[1] * d2[0]
+            if abs(cross) < 1e-10:
+                result.append(p2)
+                continue
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            t = (dx * d2[1] - dy * d2[0]) / cross
+            result.append((p1[0] + d1[0] * t, p1[1] + d1[1] * t))
+
+        return result
+
     def _scanline_intersections(self, points, y):
         """Find x-coordinates where horizontal line y intersects polygon edges."""
         intersections = []
@@ -216,15 +279,20 @@ class Canvas:
         intersections.sort()
         return intersections
 
-    def fill(self, points, angle=0, spacing=0.8):
+    def fill(self, points, angle=0, spacing=0.8, inset=0.3):
         """Fill a polygon with parallel stitch lines (hatching).
 
         Args:
             points: List of (x, y) polygon vertices in mm.
             angle: Hatch angle in degrees.
             spacing: Distance between fill lines in mm.
+            inset: Inward offset in mm so fill doesn't overlap the outline.
         """
         if len(points) < 3:
+            return self
+
+        fill_points = self._inset_polygon(points, inset)
+        if len(fill_points) < 3:
             return self
 
         # Rotate points so we can scan horizontally, then rotate back
@@ -237,7 +305,7 @@ class Canvas:
         def unrotate(px, py):
             return (px * cos_a + py * sin_a, -px * sin_a + py * cos_a)
 
-        rotated = [rotate(p[0], p[1]) for p in points]
+        rotated = [rotate(p[0], p[1]) for p in fill_points]
 
         y_min = min(p[1] for p in rotated)
         y_max = max(p[1] for p in rotated)
@@ -245,6 +313,7 @@ class Canvas:
         y = y_min + spacing / 2
         forward = True
         first = True
+        prev_end = None
         while y < y_max:
             xs = self._scanline_intersections(rotated, y)
             for i in range(0, len(xs) - 1, 2):
@@ -259,7 +328,15 @@ class Canvas:
                     self.move_to(*p0)
                     first = False
                 else:
-                    self._walk(self._x, self._y, *p0)
+                    # Check if the start of this row is close to the end of
+                    # the previous row (adjacent zigzag).  If so, stitch
+                    # across; otherwise TRIM+JUMP to avoid stitching through
+                    # already-filled areas.
+                    dist = math.hypot(p0[0] - self._x, p0[1] - self._y)
+                    if dist <= spacing * 1.5:
+                        self._walk(self._x, self._y, *p0)
+                    else:
+                        self.move_to(*p0)
 
                 self._walk(*p0, *p1)
 
@@ -268,48 +345,57 @@ class Canvas:
         return self
 
     # ── Filled shape helpers ───────────────────────────────────
+    #
+    # These draw the outline first, then fill *inside* it with an
+    # inset so the fill and outline don't overlap.  Pass outline=False
+    # to skip the outline if you only want the fill.
 
-    def filled_rectangle(self, x, y, width, height, angle=0, spacing=0.8):
-        """Draw and fill a rectangle."""
+    def filled_rectangle(self, x, y, width, height, angle=0, spacing=0.8, outline=True):
+        """Fill a rectangle.  Draws an outline first unless outline=False."""
         pts = [(x, y), (x + width, y), (x + width, y + height), (x, y + height)]
-        self.rectangle(x, y, width, height)
+        if outline:
+            self.rectangle(x, y, width, height)
         self.fill(pts, angle=angle, spacing=spacing)
         return self
 
-    def filled_circle(self, cx, cy, radius, angle=0, spacing=0.8, segments=64):
-        """Draw and fill a circle."""
+    def filled_circle(self, cx, cy, radius, angle=0, spacing=0.8, segments=64, outline=True):
+        """Fill a circle.  Draws an outline first unless outline=False."""
         pts = []
         for i in range(segments):
             a = 2 * math.pi * i / segments
             pts.append((cx + radius * math.cos(a), cy + radius * math.sin(a)))
-        self.circle(cx, cy, radius, segments=segments)
+        if outline:
+            self.circle(cx, cy, radius, segments=segments)
         self.fill(pts, angle=angle, spacing=spacing)
         return self
 
-    def filled_ellipse(self, cx, cy, rx, ry, angle=0, spacing=0.8, segments=64):
-        """Draw and fill an ellipse."""
+    def filled_ellipse(self, cx, cy, rx, ry, angle=0, spacing=0.8, segments=64, outline=True):
+        """Fill an ellipse.  Draws an outline first unless outline=False."""
         pts = []
         for i in range(segments):
             a = 2 * math.pi * i / segments
             pts.append((cx + rx * math.cos(a), cy + ry * math.sin(a)))
-        self.ellipse(cx, cy, rx, ry, segments=segments)
+        if outline:
+            self.ellipse(cx, cy, rx, ry, segments=segments)
         self.fill(pts, angle=angle, spacing=spacing)
         return self
 
-    def filled_polygon(self, points, angle=0, spacing=0.8):
-        """Draw and fill a polygon."""
-        self.polygon(points)
+    def filled_polygon(self, points, angle=0, spacing=0.8, outline=True):
+        """Fill a polygon.  Draws an outline first unless outline=False."""
+        if outline:
+            self.polygon(points)
         self.fill(points, angle=angle, spacing=spacing)
         return self
 
-    def filled_star(self, cx, cy, outer_r, inner_r, num_points=5, angle=0, spacing=0.8):
-        """Draw and fill a star."""
+    def filled_star(self, cx, cy, outer_r, inner_r, num_points=5, angle=0, spacing=0.8, outline=True):
+        """Fill a star.  Draws an outline first unless outline=False."""
         pts = []
         for i in range(num_points * 2):
             a = math.pi * i / num_points - math.pi / 2
             r = outer_r if i % 2 == 0 else inner_r
             pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-        self.star(cx, cy, outer_r, inner_r, num_points)
+        if outline:
+            self.star(cx, cy, outer_r, inner_r, num_points)
         self.fill(pts, angle=angle, spacing=spacing)
         return self
 
@@ -318,14 +404,16 @@ class Canvas:
     def satin(self, points_a, points_b):
         """Satin stitch between two parallel paths of equal length.
 
-        Zig-zags between corresponding points on path A and path B.
+        Produces a clean zig-zag: A0→B0, B0→A1, A1→B1, B1→A2, …
+        Each stitch crosses the column exactly once with no back-tracking.
         """
         if len(points_a) != len(points_b) or len(points_a) < 2:
             raise ValueError("Satin paths must have equal length >= 2")
         self.move_to(*points_a[0])
-        for i in range(len(points_a)):
-            self._walk(self._x, self._y, *points_a[i])
-            self._walk(*points_a[i], *points_b[i])
+        self._stitch_to(*points_b[0])
+        for i in range(1, len(points_a)):
+            self._stitch_to(*points_a[i])
+            self._stitch_to(*points_b[i])
         return self
 
     def satin_line(self, x0, y0, x1, y1, width=2.0):
