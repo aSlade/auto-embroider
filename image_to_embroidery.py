@@ -32,6 +32,41 @@ def _contour_to_points(contour, scale_x, scale_y, offset_x=0, offset_y=0):
     return pts
 
 
+def _contour_centroid(contour):
+    """Return (cx, cy) centroid of an OpenCV contour in pixel coords."""
+    m = cv2.moments(contour)
+    if m["m00"] == 0:
+        # Degenerate contour — use first point
+        return (float(contour[0][0][0]), float(contour[0][0][1]))
+    return (m["m10"] / m["m00"], m["m01"] / m["m00"])
+
+
+def _nearest_neighbor_order(contours, start=(0, 0)):
+    """Reorder contours by greedy nearest-neighbor on centroids.
+
+    Starting from *start*, repeatedly pick the closest unvisited contour.
+    This minimises total travel / jump distance between regions.
+    """
+    if len(contours) <= 1:
+        return list(contours)
+
+    centroids = [_contour_centroid(c) for c in contours]
+    remaining = set(range(len(contours)))
+    ordered = []
+
+    cx, cy = start
+    while remaining:
+        best_idx = min(
+            remaining,
+            key=lambda i: math.hypot(centroids[i][0] - cx, centroids[i][1] - cy),
+        )
+        ordered.append(contours[best_idx])
+        cx, cy = centroids[best_idx]
+        remaining.discard(best_idx)
+
+    return ordered
+
+
 def image_to_embroidery(
     image_path,
     output_path,
@@ -135,8 +170,9 @@ def image_to_embroidery(
         else:
             canvas.color(hex_color)
 
-        # Sort contours by area (large first) for better stitch order
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)
+        # Order contours by spatial proximity to reduce travel stitches
+        last_pos = (canvas._x / scale_x, canvas._y / scale_y) if not first_color else (0, 0)
+        contours = _nearest_neighbor_order(contours, start=last_pos)
 
         for contour in contours:
             # Simplify contour
@@ -227,14 +263,9 @@ def image_to_embroidery_outline(
             if len(c) >= 2:
                 valid.append(c)
 
-    # Sort by centroid y then x for efficient stitching order
-    def contour_sort_key(c):
-        m = cv2.moments(c)
-        if m["m00"] == 0:
-            return (0, 0)
-        return (m["m01"] / m["m00"], m["m10"] / m["m00"])
-
-    valid.sort(key=contour_sort_key)
+    # Order contours by spatial proximity (nearest-neighbor) to
+    # minimise jump stitches between regions.
+    valid = _nearest_neighbor_order(valid, start=(0, 0))
 
     for contour in valid:
         points = _contour_to_points(contour, scale_x, scale_y)
