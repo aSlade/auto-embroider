@@ -5,11 +5,68 @@ Usage:
 """
 
 import argparse
+import math
 import os
 import shutil
 from datetime import datetime
 
+import pyembroidery
+
 from image_to_embroidery import image_to_embroidery, image_to_embroidery_outline
+
+
+def embroidery_summary(filepath):
+    """Read an embroidery file and return a summary dict with stats."""
+    pattern = pyembroidery.read(filepath)
+    stitches = pattern.stitches
+
+    stitch_count = 0
+    color_changes = 0
+    total_length_mm = 0.0
+    prev_x, prev_y = None, None
+
+    for x, y, cmd in stitches:
+        if cmd == pyembroidery.STITCH:
+            stitch_count += 1
+            if prev_x is not None:
+                dx = (x - prev_x) / 10.0  # pyembroidery units are 0.1mm
+                dy = (y - prev_y) / 10.0
+                total_length_mm += math.hypot(dx, dy)
+        elif cmd == pyembroidery.COLOR_CHANGE:
+            color_changes += 1
+
+        if cmd in (pyembroidery.STITCH, pyembroidery.TRIM, pyembroidery.JUMP):
+            prev_x, prev_y = x, y
+
+    num_colors = color_changes + 1 if stitch_count > 0 else 0
+
+    # Estimate time: ~400 stitches/min for home machines, plus ~30s per color change
+    minutes = stitch_count / 400.0 + color_changes * 0.5
+    hours = int(minutes // 60)
+    mins = int(minutes % 60)
+    time_str = f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
+
+    return {
+        "stitches": stitch_count,
+        "colors": num_colors,
+        "thread_length_m": total_length_mm / 1000.0,
+        "estimated_time": time_str,
+    }
+
+
+def write_summary(embroidery_path):
+    """Generate a .summary.txt file next to the embroidery file."""
+    stats = embroidery_summary(embroidery_path)
+    base = os.path.splitext(embroidery_path)[0]
+    ext = os.path.splitext(embroidery_path)[1]
+    summary_path = f"{base}{ext}.summary.txt"
+    with open(summary_path, "w") as f:
+        f.write(f"File: {os.path.basename(embroidery_path)}\n")
+        f.write(f"Stitches: {stats['stitches']:,}\n")
+        f.write(f"Thread colors: {stats['colors']}\n")
+        f.write(f"Thread length: {stats['thread_length_m']:.1f} m\n")
+        f.write(f"Estimated time: {stats['estimated_time']}\n")
+    return summary_path
 
 
 def run(image_path, width_mm=150, max_colors=10, fill_spacing=0.6):
@@ -32,6 +89,8 @@ def run(image_path, width_mm=150, max_colors=10, fill_spacing=0.6):
         min_area=15, stitch_length=2.5, simplify=0.012,
     )
 
+    write_summary(dst_path)
+
     # Filled embroidery — PES
     pes_path = os.path.join(run_dir, f"{base_name}_filled.pes")
     print(f"Generating filled PES -> {pes_path}")
@@ -42,6 +101,8 @@ def run(image_path, width_mm=150, max_colors=10, fill_spacing=0.6):
         min_area=15, stitch_length=2.5, simplify=0.012,
     )
 
+    write_summary(pes_path)
+
     # Outline-only embroidery
     outline_path = os.path.join(run_dir, f"{base_name}_outline.dst")
     print(f"Generating outline DST -> {outline_path}")
@@ -51,6 +112,8 @@ def run(image_path, width_mm=150, max_colors=10, fill_spacing=0.6):
         edge_threshold1=30, edge_threshold2=100,
         min_length=8, simplify=0.015,
     )
+
+    write_summary(outline_path)
 
     # Write a run info file
     info_path = os.path.join(run_dir, "run_info.txt")

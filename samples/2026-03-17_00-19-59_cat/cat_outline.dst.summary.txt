@@ -1,0 +1,5 @@
+File: cat_outline.dst
+Stitches: 19,881
+Thread colors: 1
+Thread length: 23.7 m
+Estimated time: 49m
