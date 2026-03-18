@@ -1,0 +1,10 @@
+Timestamp: 2026-03-18_19-53-52
+Source: cat-and-flowers-drawing-web.jpg
+Width: 50.8mm
+Colors: 10
+Fill spacing: 0.6mm
+Fill angle: 45deg
+Outputs:
+  cat-and-flowers-drawing-web_filled.dst (62.9 KB)
+  cat-and-flowers-drawing-web_filled.pes (133.4 KB)
+  cat-and-flowers-drawing-web_outline.dst (9.7 KB)
