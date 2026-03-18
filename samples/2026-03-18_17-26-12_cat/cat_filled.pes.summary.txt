@@ -1,0 +1,5 @@
+File: cat_filled.pes
+Stitches: 49,635
+Thread colors: 8
+Thread length: 47.8 m
+Estimated time: 2h 7m

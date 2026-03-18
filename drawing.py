@@ -20,6 +20,13 @@ def _mm(v):
 class Canvas:
     """Drawing surface that builds an embroidery pattern."""
 
+    # Minimum distance (mm) to trigger a trim+jump; shorter moves just
+    # stitch across to avoid the overhead of trim/tie-off/jump/tie-in.
+    MIN_JUMP_DISTANCE = 3.0
+
+    # Lock stitch size in mm (tiny back-and-forth to secure thread).
+    LOCK_STITCH_SIZE = 0.3
+
     def __init__(self, stitch_length=2.0, color="black"):
         """
         Args:
@@ -32,6 +39,7 @@ class Canvas:
         self._add_thread(color)
         self._x = 0.0
         self._y = 0.0
+        self._section_started = False  # tracks if we've stitched since last move
 
     # ── Thread / color management ──────────────────────────────
 
@@ -49,19 +57,71 @@ class Canvas:
         self.pattern.add_thread(thread)
 
     def color(self, color):
-        """Switch to a new thread color."""
+        """Switch to a new thread color.
+
+        Uses COLOR_BREAK so pyembroidery's encoder handles the trim, jump,
+        and thread-change sequence correctly for each output format.
+        """
+        self._lock_stitch_out()
         self._color = color
         self._add_thread(color)
-        self.pattern.add_command(pyembroidery.COLOR_CHANGE)
+        self.pattern.add_command(pyembroidery.COLOR_BREAK)
+        self._section_started = False
         return self
+
+    # ── Lock stitches ─────────────────────────────────────────
+
+    def _lock_stitch_in(self):
+        """Tie-in: small forward-back-forward stitches to anchor thread.
+
+        Called at the start of a new stitching section (after a jump).
+        The lock is placed at the current position so it will be buried
+        under subsequent stitches.
+        """
+        s = self.LOCK_STITCH_SIZE
+        x, y = self._x, self._y
+        self.pattern.add_command(pyembroidery.STITCH, _mm(x + s), _mm(y))
+        self.pattern.add_command(pyembroidery.STITCH, _mm(x), _mm(y))
+        self.pattern.add_command(pyembroidery.STITCH, _mm(x + s), _mm(y + s))
+        self.pattern.add_command(pyembroidery.STITCH, _mm(x), _mm(y))
+
+    def _lock_stitch_out(self):
+        """Tie-off: small back-and-forth stitches to secure thread before trim.
+
+        Called before a trim or color change so the thread end doesn't unravel.
+        """
+        if not self._section_started:
+            return
+        s = self.LOCK_STITCH_SIZE
+        x, y = self._x, self._y
+        self.pattern.add_command(pyembroidery.STITCH, _mm(x - s), _mm(y))
+        self.pattern.add_command(pyembroidery.STITCH, _mm(x), _mm(y))
+        self.pattern.add_command(pyembroidery.STITCH, _mm(x - s), _mm(y - s))
+        self.pattern.add_command(pyembroidery.STITCH, _mm(x), _mm(y))
 
     # ── Movement ───────────────────────────────────────────────
 
     def move_to(self, x, y):
-        """Move needle without stitching."""
-        self.pattern.add_command(pyembroidery.TRIM)
+        """Move needle to (x, y) without stitching.
+
+        For short distances (< MIN_JUMP_DISTANCE), stitches across to avoid
+        the overhead of a trim cycle.  For longer distances, does a proper
+        tie-off, SEQUENCE_BREAK (trim + jump), and tie-in at the destination.
+        """
+        dist = math.hypot(x - self._x, y - self._y)
+
+        if dist < self.MIN_JUMP_DISTANCE and self._section_started:
+            # Short move — stitch across instead of trimming.
+            self._walk(self._x, self._y, x, y)
+            return self
+
+        # Tie-off current section, then break
+        self._lock_stitch_out()
+        self.pattern.add_command(pyembroidery.SEQUENCE_BREAK)
         self.pattern.add_command(pyembroidery.STITCH, _mm(x), _mm(y))
         self._x, self._y = x, y
+        self._lock_stitch_in()
+        self._section_started = True
         return self
 
     # ── Primitives ─────────────────────────────────────────────
@@ -70,6 +130,7 @@ class Canvas:
         """Add a single stitch to (x, y) in mm."""
         self.pattern.add_command(pyembroidery.STITCH, _mm(x), _mm(y))
         self._x, self._y = x, y
+        self._section_started = True
 
     def _walk(self, x0, y0, x1, y1):
         """Stitch from (x0,y0) to (x1,y1), splitting long segments."""
@@ -504,8 +565,11 @@ class Canvas:
     def save(self, filename):
         """Finalize and save the pattern to a file.
 
-        The format is determined by the file extension (e.g., .dst, .pes, .jef).
+        Adds a final tie-off lock stitch before ending so the last section
+        is secured.  The format is determined by the file extension
+        (e.g., .dst, .pes, .jef).
         """
+        self._lock_stitch_out()
         self.pattern.add_command(pyembroidery.END)
         pyembroidery.write(self.pattern, filename)
         return self
