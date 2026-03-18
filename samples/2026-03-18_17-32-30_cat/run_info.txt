@@ -1,0 +1,10 @@
+Timestamp: 2026-03-18_17-32-30
+Source: cat.jpg
+Width: 150mm
+Colors: 10
+Fill spacing: 0.6mm
+Fill angle: 45deg
+Outputs:
+  cat_filled.dst (170.3 KB)
+  cat_filled.pes (361.6 KB)
+  cat_outline.dst (87.5 KB)

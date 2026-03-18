@@ -1,0 +1,5 @@
+File: cat_filled.dst
+Stitches: 49,635
+Thread colors: 8
+Thread length: 67.9 m
+Estimated time: 2h 7m
